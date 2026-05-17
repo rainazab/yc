@@ -34,8 +34,11 @@ export function defaultPolicies(): Policies {
 
 export function seedCustomers(): Customer[] {
   const now = new Date().toISOString();
+  // Kept slim for the live demo: 2 history customers so the operational feed
+  // has visible activity, plus 2 fallback customers in case the live
+  // AgentMail/AgentPhone integrations hiccup. Everything else is removed so
+  // the inbox doesn't compete with real inbound.
   return [
-    // Live demo customers
     {
       id: "cus_alex",
       name: "Alex",
@@ -43,24 +46,6 @@ export function seedCustomers(): Customer[] {
       vip: false,
       prior_refunds: 0,
       lifetime_value: 82,
-      created_at: now,
-    },
-    {
-      id: "cus_jordan",
-      name: "Jordan",
-      email: "jordan@example.com",
-      vip: false,
-      prior_refunds: 0,
-      lifetime_value: 0,
-      created_at: now,
-    },
-    {
-      id: "cus_drinkco",
-      name: "DrinkCo (brand@drinkco.com)",
-      email: "brand@drinkco.com",
-      vip: false,
-      prior_refunds: 0,
-      lifetime_value: 0,
       created_at: now,
     },
     {
@@ -72,16 +57,6 @@ export function seedCustomers(): Customer[] {
       lifetime_value: 0,
       created_at: now,
     },
-    {
-      id: "cus_angry",
-      name: "angry_customer",
-      email: "angry@social.example",
-      vip: false,
-      prior_refunds: 0,
-      lifetime_value: 240,
-      created_at: now,
-    },
-    // History customers (pre-handled)
     {
       id: "cus_seed_priya",
       name: "Priya",
@@ -100,44 +75,16 @@ export function seedCustomers(): Customer[] {
       lifetime_value: 0,
       created_at: now,
     },
-    // Pending inbound customers (arrive live)
-    {
-      id: "cus_pending_sam",
-      name: "Sam",
-      email: "sam@example.com",
-      vip: false,
-      prior_refunds: 0,
-      lifetime_value: 0,
-      created_at: now,
-    },
-    {
-      id: "cus_pending_lina",
-      name: "Lina",
-      email: "lina@example.com",
-      vip: false,
-      prior_refunds: 0,
-      lifetime_value: 0,
-      created_at: now,
-    },
-    {
-      id: "cus_pending_paloma",
-      name: "Paloma Studio",
-      email: "ig:@palomastudio",
-      vip: false,
-      prior_refunds: 0,
-      lifetime_value: 0,
-      created_at: now,
-    },
   ];
 }
 
 export function seedMessages(): InboundMessage[] {
   const base = Date.now();
-  const mk = (i: number) => new Date(base - i * 1000 * 60 * 17).toISOString();
   const earlier = (mins: number) =>
     new Date(base - mins * 60 * 1000).toISOString();
   return [
-    // Already handled — appear in operational feed at demo start.
+    // Two already-handled workflows so the operational feed has visible
+    // history when the cockpit loads.
     {
       id: "msg_seed_refund_handled",
       customer_id: "cus_seed_priya",
@@ -158,36 +105,17 @@ export function seedMessages(): InboundMessage[] {
       status: "handled",
       amount_hint: 500,
     },
-    // Live demo workflows — owner runs these during the pitch.
+    // Two fallback workflows in case the live AgentMail / AgentPhone
+    // integrations hiccup mid-demo. Everything else lands via real webhooks.
     {
       id: "msg_refund_001",
       customer_id: "cus_alex",
       channel: "email",
       subject: "Refund request for creator course",
       body: "Hey, I bought your creator course yesterday but it wasn't what I expected. Can I get a refund? It was $82.",
-      received_at: mk(0),
+      received_at: earlier(8),
       status: "new",
       amount_hint: 82,
-    },
-    {
-      id: "msg_pricing_002",
-      customer_id: "cus_jordan",
-      channel: "sms",
-      subject: "SMS via AgentPhone — budget question",
-      body: "I want your consulting package but my budget is $1,500. Can you do that instead of $3,000?",
-      received_at: mk(1),
-      status: "new",
-      amount_hint: 1500,
-    },
-    {
-      id: "msg_sponsor_003",
-      customer_id: "cus_drinkco",
-      channel: "email",
-      subject: "Sponsorship offer for next video",
-      body: "Hi, we'd love to sponsor your next video for $750. We need 60 seconds integrated and 3 TikTok posts.",
-      received_at: mk(2),
-      status: "new",
-      amount_hint: 750,
     },
     {
       id: "msg_lead_004",
@@ -195,19 +123,9 @@ export function seedMessages(): InboundMessage[] {
       channel: "phone_transcript",
       subject: "Phone call transcript — AI workflow build",
       body: "Hi, I run a fast-growing DTC brand and need help building an AI customer support workflow. Budget is around $8k. Are you available next week?",
-      received_at: mk(3),
+      received_at: earlier(2),
       status: "new",
       amount_hint: 8000,
-    },
-    {
-      id: "msg_escalate_005",
-      customer_id: "cus_angry",
-      channel: "social_dm",
-      subject: "Instagram DM — repeated complaint",
-      body: "I've messaged three times and nobody has answered. This is ridiculous.",
-      received_at: mk(4),
-      status: "new",
-      amount_hint: null,
     },
   ];
 }
@@ -325,37 +243,8 @@ export function seedWallet(): CompanyWallet {
 }
 
 export function seedPendingInbound(): InboundMessage[] {
-  // Items that arrive live during the demo — the cockpit polls for them.
-  return [
-    {
-      id: "msg_pending_email_refund",
-      customer_id: "cus_pending_sam",
-      channel: "email",
-      subject: "Quick refund question — onboarding template",
-      body: "Hey! Just bought the onboarding template for $39 but I'd actually like a refund — it overlaps with something I already own. Thanks!",
-      received_at: new Date().toISOString(),
-      status: "new",
-      amount_hint: 39,
-    },
-    {
-      id: "msg_pending_sms_pricing",
-      customer_id: "cus_pending_lina",
-      channel: "sms",
-      subject: "SMS via AgentPhone — pricing",
-      body: "Hi! Love your work. Can you do the consulting engagement for $2,000 instead of $3,000? It's all I've got this quarter.",
-      received_at: new Date().toISOString(),
-      status: "new",
-      amount_hint: 2000,
-    },
-    {
-      id: "msg_pending_dm_sponsor",
-      customer_id: "cus_pending_paloma",
-      channel: "social_dm",
-      subject: "Instagram DM — brand partnership",
-      body: "hey! love your stuff. would you be open to a brand partnership — we'd like to sponsor a video for $2,400, 45-second integration. lmk!",
-      received_at: new Date().toISOString(),
-      status: "new",
-      amount_hint: 2400,
-    },
-  ];
+  // Empty for the live demo — real inbound arrives via AgentMail /
+  // AgentPhone webhooks instead. To re-enable the simulated drip during
+  // development, add InboundMessage entries here.
+  return [];
 }

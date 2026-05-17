@@ -13,7 +13,7 @@ export interface BusinessProfile {
 
 export const demoBusiness: BusinessProfile = {
   name: "Opelo Demo Studio",
-  ownerName: "Demo Owner",
+  ownerName: "the owner",
   managerName: "Opelo",
   phone: process.env.OWNER_PHONE_NUMBER || "+15555550123",
   offerings: [

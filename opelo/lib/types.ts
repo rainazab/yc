@@ -38,6 +38,19 @@ export interface Customer {
 
 export type Channel = "email" | "sms" | "form" | "phone_transcript" | "social_dm";
 
+export interface InboundMessageMetadata {
+  agentphone?: {
+    agentId?: string;
+    conversationId?: string;
+    numberId?: string;
+    /**
+     * Upstream sub-channel ("sms" or "imessage"). Mapped down to our
+     * top-level Channel ("sms") so the cockpit shows a unified SMS column.
+     */
+    channel?: "sms" | "imessage";
+  };
+}
+
 export interface InboundMessage {
   id: string;
   customer_id: string;
@@ -49,6 +62,7 @@ export interface InboundMessage {
   amount_hint?: number | null;
   source_id?: string;
   thread_id?: string;
+  metadata?: InboundMessageMetadata;
 }
 
 export interface Policies {
@@ -115,5 +129,15 @@ export interface OwnerSummary {
   period_start: string;
   period_end: string;
   text: string;
+  created_at: string;
+}
+
+export interface WebhookEvent {
+  id: string;
+  provider: "agentphone" | "agentmail";
+  event_type: string;
+  payload: unknown;
+  parsed_kind?: "sms" | "call" | "email" | "unknown";
+  inserted_message_id?: string;
   created_at: string;
 }

@@ -1,10 +1,17 @@
 import { Customer, InboundMessage } from "../types";
 import { store } from "../db/store";
-import { normalizeInboundSMS } from "./agentphone";
+import {
+  ParsedCall,
+  ParsedSMS,
+  eventTypeOf,
+  normalizeInboundCall,
+  normalizeInboundSMS,
+} from "./agentphone";
 
-export interface SmsIngestResult {
+export interface AgentPhoneIngestResult {
   ok: boolean;
   inserted: boolean;
+  parsed_kind: "sms" | "call" | "unknown";
   reason?: string;
   message?: InboundMessage;
   customer?: Customer;
@@ -12,30 +19,46 @@ export interface SmsIngestResult {
 }
 
 /**
- * Persist a normalized AgentPhone inbound SMS into the store so the cockpit
- * picks it up via /api/messages polling.
+ * Top-level ingest for any AgentPhone webhook payload. Try SMS shape first,
+ * then call/transcript shape. Unknown payloads are returned as such so the
+ * webhook route can still record them in the debug feed.
  */
 export async function ingestAgentPhoneWebhook(
   payload: unknown,
-): Promise<SmsIngestResult> {
-  const parsed = normalizeInboundSMS(payload);
-  if (!parsed) {
-    return {
-      ok: false,
-      inserted: false,
-      reason: "could_not_parse_payload",
-    };
+): Promise<AgentPhoneIngestResult> {
+  const event_type = eventTypeOf(payload) || "agentphone.event";
+
+  const sms = normalizeInboundSMS(payload);
+  if (sms) {
+    return ingestSMS(sms, event_type);
   }
 
-  const fromPhone = parsed.from;
-  const phoneSlug = slug(fromPhone) || `unknown_${Date.now()}`;
+  const call = normalizeInboundCall(payload);
+  if (call) {
+    return ingestCall(call, event_type);
+  }
+
+  return {
+    ok: false,
+    inserted: false,
+    parsed_kind: "unknown",
+    reason: "could_not_parse_payload",
+    event_type,
+  };
+}
+
+async function ingestSMS(
+  parsed: ParsedSMS,
+  event_type: string,
+): Promise<AgentPhoneIngestResult> {
+  const phoneSlug = slug(parsed.from) || `unknown_${Date.now()}`;
   const customerId = `cus_live_${phoneSlug}`;
 
   const customer: Customer = {
     id: customerId,
-    name: friendlyName(fromPhone),
+    name: friendlyName(parsed.from),
     email: "",
-    phone: fromPhone,
+    phone: parsed.from,
     vip: false,
     prior_refunds: 0,
     lifetime_value: 0,
@@ -44,15 +67,75 @@ export async function ingestAgentPhoneWebhook(
   await store.upsertCustomer(customer);
 
   const messageId = `msg_ap_${slug(parsed.source_id)}`;
+  const hasAgentphoneMeta =
+    parsed.agentId || parsed.conversationId || parsed.numberId || parsed.channel;
   const message: InboundMessage = {
     id: messageId,
     customer_id: customerId,
     channel: "sms",
-    subject: `SMS from ${fromPhone}`,
+    subject:
+      parsed.channel === "imessage"
+        ? `iMessage from ${parsed.from}`
+        : `SMS from ${parsed.from}`,
     body: parsed.body,
     received_at: parsed.received_at,
     status: "new",
     amount_hint: detectAmount(parsed.body),
+    source_id: parsed.source_id,
+    metadata: hasAgentphoneMeta
+      ? {
+          agentphone: {
+            agentId: parsed.agentId,
+            conversationId: parsed.conversationId,
+            numberId: parsed.numberId,
+            channel: parsed.channel,
+          },
+        }
+      : undefined,
+  };
+  const { inserted, message: stored } = await store.addMessage(message);
+
+  return {
+    ok: true,
+    inserted,
+    parsed_kind: "sms",
+    reason: inserted ? "inserted" : "duplicate",
+    message: stored,
+    customer,
+    event_type: parsed.event_type || event_type,
+  };
+}
+
+async function ingestCall(
+  parsed: ParsedCall,
+  event_type: string,
+): Promise<AgentPhoneIngestResult> {
+  const phoneSlug = slug(parsed.from) || `unknown_${Date.now()}`;
+  const customerId = `cus_live_call_${phoneSlug}`;
+  const displayName = parsed.caller_name?.trim() || friendlyName(parsed.from);
+
+  const customer: Customer = {
+    id: customerId,
+    name: displayName,
+    email: "",
+    phone: parsed.from,
+    vip: false,
+    prior_refunds: 0,
+    lifetime_value: 0,
+    created_at: new Date().toISOString(),
+  };
+  await store.upsertCustomer(customer);
+
+  const messageId = `msg_apcall_${slug(parsed.source_id)}`;
+  const message: InboundMessage = {
+    id: messageId,
+    customer_id: customerId,
+    channel: "phone_transcript",
+    subject: `Call transcript from ${displayName}`,
+    body: parsed.transcript,
+    received_at: parsed.received_at,
+    status: "new",
+    amount_hint: detectAmount(parsed.transcript),
     source_id: parsed.source_id,
   };
   const { inserted, message: stored } = await store.addMessage(message);
@@ -60,10 +143,11 @@ export async function ingestAgentPhoneWebhook(
   return {
     ok: true,
     inserted,
+    parsed_kind: "call",
     reason: inserted ? "inserted" : "duplicate",
     message: stored,
     customer,
-    event_type: parsed.event_type,
+    event_type: parsed.event_type || event_type,
   };
 }
 
@@ -72,8 +156,6 @@ function slug(s: string): string {
 }
 
 function friendlyName(phone: string): string {
-  // Format the phone like (555) 123-4567 when it looks like a US number;
-  // otherwise return the raw E.164 string. Either way it's identifiable.
   const digits = phone.replace(/[^0-9]/g, "");
   if (digits.length === 11 && digits.startsWith("1")) {
     return `(${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
@@ -86,8 +168,7 @@ function friendlyName(phone: string): string {
 
 function detectAmount(text: string): number | undefined {
   // Prefer the FIRST dollar amount — in negotiation-shaped messages people
-  // lead with their budget ("my budget is $1,500. Can you do that instead of
-  // $3,000?") and we want the customer's offer, not the listing price.
+  // lead with their budget.
   const matches = Array.from(
     text.matchAll(/\$\s?([0-9][0-9,]*(?:\.[0-9]{1,2})?)(\s?[kK])?/g),
   );

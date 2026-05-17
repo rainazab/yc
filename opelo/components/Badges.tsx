@@ -2,20 +2,20 @@ import clsx from "clsx";
 import { Channel, Classification, Decision } from "@/lib/types";
 
 const classMap: Record<Classification, { label: string; tone: string }> = {
-  refund_request:    { label: "Refund request",    tone: "rose"    },
-  pricing_exception: { label: "Pricing exception", tone: "amber"   },
-  sponsorship_offer: { label: "Sponsorship",       tone: "violet"  },
-  qualified_lead:    { label: "Qualified lead",    tone: "emerald" },
-  scheduling_request:{ label: "Scheduling",        tone: "sky"     },
-  escalation:        { label: "Escalation",        tone: "red"     },
+  refund_request:    { label: "Refund",            tone: "rose"    },
+  pricing_exception: { label: "Pricing question",  tone: "amber"   },
+  sponsorship_offer: { label: "Brand offer",       tone: "violet"  },
+  qualified_lead:    { label: "Good lead",         tone: "emerald" },
+  scheduling_request:{ label: "Meeting",           tone: "sky"     },
+  escalation:        { label: "Needs review",      tone: "red"     },
 };
 
 const decisionMap: Record<Decision, { label: string; tone: string }> = {
-  approve:          { label: "Approved",       tone: "emerald" },
-  reject:           { label: "Rejected",       tone: "rose"    },
-  negotiate:        { label: "Negotiated",     tone: "amber"   },
-  schedule:         { label: "Scheduled",      tone: "sky"     },
-  escalate_to_owner:{ label: "Owner notified", tone: "red"     },
+  approve:          { label: "Handled",        tone: "emerald" },
+  reject:           { label: "Not a fit",      tone: "rose"    },
+  negotiate:        { label: "Offer sent",     tone: "amber"   },
+  schedule:         { label: "Booked",         tone: "sky"     },
+  escalate_to_owner:{ label: "Needs you",      tone: "red"     },
 };
 
 // Light-theme tones — readable on white/light backgrounds
@@ -47,9 +47,9 @@ export function DecisionBadge({ value }: { value: Decision }) {
 
 const channelMap: Record<Channel, { label: string; tone: string }> = {
   email:            { label: "Email",            tone: "ink"    },
-  sms:              { label: "SMS · AgentPhone",  tone: "sky"    },
+  sms:              { label: "Text",             tone: "sky"    },
   form:             { label: "Form",             tone: "ink"    },
-  phone_transcript: { label: "Call · AgentPhone", tone: "violet" },
+  phone_transcript: { label: "Call",             tone: "violet" },
   social_dm:        { label: "Social DM",        tone: "amber"  },
 };
 
@@ -66,6 +66,6 @@ export function StatusPill({ status }: { status: "new" | "processing" | "handled
         ? "border-amber-200 bg-amber-50 text-amber-700"
         : "border-emerald-200 bg-emerald-50 text-emerald-700";
   const label =
-    status === "new" ? "Awaiting AI" : status === "processing" ? "Working…" : "Handled";
+    status === "new" ? "New" : status === "processing" ? "Working…" : "Done";
   return <span className={clsx("pill", tone)}>{label}</span>;
 }

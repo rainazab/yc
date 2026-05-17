@@ -390,12 +390,17 @@ async function runExternalActions(args: RunArgs): Promise<MockExternalAction[]> 
     case "sms":
     case "phone_transcript": {
       const to = customer.phone || customer.email || "+15555550100";
+      const apMeta = message.metadata?.agentphone;
       actions.push(
         await agentphoneSendSMS({
           to,
           body: customer_response,
           live: isLiveCustomer && !!customer.phone,
           source_id: message.source_id,
+          agentId: apMeta?.agentId,
+          conversationId: apMeta?.conversationId,
+          numberId: apMeta?.numberId,
+          channel: apMeta?.channel,
         }),
       );
       break;

@@ -7,7 +7,9 @@ import {
   InboundMessage,
   OwnerSummary,
   Policies,
+  WebhookEvent,
 } from "../types";
+import { nanoid } from "../integrations/util";
 import {
   defaultPolicies,
   seedActions,
@@ -21,6 +23,8 @@ const DATA_DIR = path.join(process.cwd(), ".opelo-data");
 const DATA_FILE = path.join(DATA_DIR, "store.json");
 
 interface Snapshot {
+  business_name: string;
+  business_description: string;
   policies: Policies;
   customers: Customer[];
   messages: InboundMessage[];
@@ -28,6 +32,7 @@ interface Snapshot {
   owner_summaries: OwnerSummary[];
   pending_inbound: InboundMessage[];
   wallet: CompanyWallet;
+  webhook_events: WebhookEvent[];
 }
 
 let cache: Snapshot | null = null;
@@ -35,6 +40,8 @@ let writeLock: Promise<void> = Promise.resolve();
 
 function initial(): Snapshot {
   return {
+    business_name: "Opelo Demo Studio",
+    business_description: "A demo workspace with customer messages about refunds, sponsorships, bookings, and pricing.",
     policies: defaultPolicies(),
     customers: seedCustomers(),
     messages: seedMessages(),
@@ -42,6 +49,29 @@ function initial(): Snapshot {
     owner_summaries: [],
     pending_inbound: seedPendingInbound(),
     wallet: seedWallet(),
+    webhook_events: [],
+  };
+}
+
+function blank(): Snapshot {
+  return {
+    business_name: "Your business",
+    business_description: "",
+    policies: defaultPolicies(),
+    customers: [],
+    messages: [],
+    actions: [],
+    owner_summaries: [],
+    pending_inbound: [],
+    wallet: {
+      available_cents: 0,
+      pending_cents: 0,
+      refunded_today_cents: 0,
+      revenue_generated_today_cents: 0,
+      currency: "USD",
+      updated_at: new Date().toISOString(),
+    },
+    webhook_events: [],
   };
 }
 
@@ -58,9 +88,12 @@ async function readSnapshot(): Promise<Snapshot> {
   try {
     const raw = await fs.readFile(DATA_FILE, "utf8");
     cache = JSON.parse(raw) as Snapshot;
+    if (!cache.business_name) cache.business_name = "Opelo Demo Studio";
+    if (typeof cache.business_description !== "string") cache.business_description = "";
     if (!cache.owner_summaries) cache.owner_summaries = [];
     if (!cache.pending_inbound) cache.pending_inbound = seedPendingInbound();
     if (!cache.wallet) cache.wallet = seedWallet();
+    if (!cache.webhook_events) cache.webhook_events = [];
     return cache;
   } catch {
     cache = initial();
@@ -89,6 +122,30 @@ async function withLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 export const store = {
+  async getBusinessName(): Promise<string> {
+    const snap = await readSnapshot();
+    return snap.business_name;
+  },
+  async setBusinessName(name: string): Promise<string> {
+    return withLock(async () => {
+      const snap = await readSnapshot();
+      snap.business_name = name.trim() || "Your business";
+      await persist();
+      return snap.business_name;
+    });
+  },
+  async getBusinessDescription(): Promise<string> {
+    const snap = await readSnapshot();
+    return snap.business_description;
+  },
+  async setBusinessDescription(description: string): Promise<string> {
+    return withLock(async () => {
+      const snap = await readSnapshot();
+      snap.business_description = description.trim();
+      await persist();
+      return snap.business_description;
+    });
+  },
   async getPolicies(): Promise<Policies> {
     const snap = await readSnapshot();
     return snap.policies;
@@ -224,6 +281,54 @@ export const store = {
       return snap.wallet;
     });
   },
+  async addWebhookEvent(
+    event: Omit<WebhookEvent, "id" | "created_at"> & {
+      id?: string;
+      created_at?: string;
+    },
+  ): Promise<WebhookEvent> {
+    return withLock(async () => {
+      const snap = await readSnapshot();
+      const full: WebhookEvent = {
+        id: event.id ?? nanoid("wh"),
+        created_at: event.created_at ?? new Date().toISOString(),
+        provider: event.provider,
+        event_type: event.event_type,
+        payload: event.payload,
+        parsed_kind: event.parsed_kind,
+        inserted_message_id: event.inserted_message_id,
+      };
+      snap.webhook_events.unshift(full);
+      if (snap.webhook_events.length > 200) {
+        snap.webhook_events.length = 200;
+      }
+      await persist();
+      return full;
+    });
+  },
+  async updateWebhookEvent(
+    id: string,
+    patch: Partial<Pick<WebhookEvent, "parsed_kind" | "inserted_message_id">>,
+  ): Promise<WebhookEvent | null> {
+    return withLock(async () => {
+      const snap = await readSnapshot();
+      const e = snap.webhook_events.find((w) => w.id === id);
+      if (!e) return null;
+      if (patch.parsed_kind !== undefined) e.parsed_kind = patch.parsed_kind;
+      if (patch.inserted_message_id !== undefined) {
+        e.inserted_message_id = patch.inserted_message_id;
+      }
+      await persist();
+      return e;
+    });
+  },
+  async listWebhookEvents(provider?: string): Promise<WebhookEvent[]> {
+    const snap = await readSnapshot();
+    const events = provider
+      ? snap.webhook_events.filter((e) => e.provider === provider)
+      : snap.webhook_events;
+    return [...events];
+  },
   async dequeueNextPending(): Promise<InboundMessage | null> {
     return withLock(async () => {
       const snap = await readSnapshot();
@@ -243,6 +348,12 @@ export const store = {
   async reset(): Promise<void> {
     return withLock(async () => {
       cache = initial();
+      await persist();
+    });
+  },
+  async resetBlank(): Promise<void> {
+    return withLock(async () => {
+      cache = blank();
       await persist();
     });
   },

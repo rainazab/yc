@@ -1,19 +1,21 @@
 import Link from "next/link";
+import { AppIcon, AppIconName } from "@/components/AppIcon";
 
 const values = [
-  { emoji: "🧑‍💻", text: "Built for people who do everything themselves — and shouldn't have to." },
-  { emoji: "🤝", text: "Your clients deserve a fast, thoughtful response every time. Opelo makes that possible." },
-  { emoji: "📋", text: "Rules you write. Opelo follows them — even when you're unavailable." },
-  { emoji: "🔔", text: "You stay in control. Opelo handles the routine, escalates the unusual." },
-  { emoji: "🌱", text: "Starts simple. Gets smarter. The longer it runs, the better it knows your business." },
-];
+  { icon: "spark", text: "Built for people who do everything themselves — and shouldn't have to." },
+  { icon: "handshake", text: "Your clients deserve a fast, thoughtful response every time. Opelo makes that possible." },
+  { icon: "rules", text: "Rules you write. Opelo follows them — even when you're unavailable." },
+  { icon: "bell", text: "You stay in control. Opelo handles the routine, escalates the unusual." },
+  { icon: "growth", text: "Starts simple. Gets smarter. The longer it runs, the better it knows your business." },
+] satisfies { icon: AppIconName; text: string }[];
 
 export default function CompanyPage() {
   return (
     <div className="mx-auto max-w-2xl px-6 py-16">
       {/* Back link */}
-      <Link href="/" className="inline-flex items-center text-sm text-stone-400 hover:text-stone-600 transition mb-10">
-        ← Back to home
+      <Link href="/" className="mb-10 inline-flex items-center gap-1.5 text-sm text-stone-400 transition hover:text-stone-600">
+        <AppIcon name="back" className="h-4 w-4" />
+        Back to home
       </Link>
 
       {/* Heading */}
@@ -40,9 +42,11 @@ export default function CompanyPage() {
           What we believe
         </h2>
         <ul className="space-y-5">
-          {values.map((v) => (
-            <li key={v.emoji} className="flex items-start gap-4">
-              <span className="text-2xl mt-0.5">{v.emoji}</span>
+        {values.map((v) => (
+            <li key={v.text} className="flex items-start gap-4">
+              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-stone-50 text-stone-600">
+                <AppIcon name={v.icon} className="h-4 w-4" />
+              </span>
               <p className="text-base text-stone-600 leading-relaxed">{v.text}</p>
             </li>
           ))}

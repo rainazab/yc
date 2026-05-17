@@ -1,17 +1,25 @@
 import Link from "next/link";
 import { store } from "@/lib/db/store";
 import { ActionRecord, Customer, ActionType } from "@/lib/types";
+import { AppIcon, AppIconName } from "@/components/AppIcon";
+import { NewMessageButton } from "@/components/NewMessageButton";
+import { BusinessRecommendation, RecommendationsPanel } from "@/components/RecommendationsPanel";
 
 export const dynamic = "force-dynamic";
 
 // Plain-English helpers
-function actionEmoji(t: ActionType): string {
-  const map: Partial<Record<ActionType, string>> = {
-    refund_issued: "✅", meeting_booked: "📅", owner_escalated: "🔔",
-    sponsorship_countered: "💬", discount_offered: "💬", auto_reply_sent: "✉️",
-    sponsorship_declined: "✖️", lead_nurtured: "🌱",
+function actionIcon(t: ActionType): AppIconName {
+  const map: Partial<Record<ActionType, AppIconName>> = {
+    refund_issued: "refund",
+    meeting_booked: "calendar",
+    owner_escalated: "bell",
+    sponsorship_countered: "chat",
+    discount_offered: "chat",
+    auto_reply_sent: "mail",
+    sponsorship_declined: "x",
+    lead_nurtured: "growth",
   };
-  return map[t] ?? "⚡";
+  return map[t] ?? "spark";
 }
 
 function actionBadge(t: ActionType): { label: string; cls: string } {
@@ -50,10 +58,146 @@ function timeAgo(iso: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function buildRecommendations({
+  actions,
+  businessDescription,
+  businessName,
+  customers,
+  messages,
+  policies,
+}: {
+  actions: ActionRecord[];
+  businessDescription: string;
+  businessName: string;
+  customers: Customer[];
+  messages: Awaited<ReturnType<typeof store.listMessages>>;
+  policies: Awaited<ReturnType<typeof store.getPolicies>>;
+}): BusinessRecommendation[] {
+  const pendingMessages = messages.filter((m) => m.status === "new");
+  const reviewActions = actions.filter((a) => a.action_type === "owner_escalated");
+  const bookedMeetings = actions.filter((a) => a.action_type === "meeting_booked");
+  const counterOffers = actions.filter((a) => a.action_type === "sponsorship_countered" || a.action_type === "discount_offered");
+  const recommendations: BusinessRecommendation[] = [];
+
+  if (pendingMessages.length > 0) {
+    const first = pendingMessages[0];
+    const customer = customers.find((c) => c.id === first.customer_id);
+    recommendations.push({
+      id: "waiting-messages",
+      icon: "inbox",
+      title: `Handle ${pendingMessages.length} waiting ${pendingMessages.length === 1 ? "message" : "messages"}`,
+      summary: `${customer?.name ?? "A customer"} is waiting. Let Opelo suggest the next reply.`,
+      detail: "There are customer messages that have not been handled yet. Start with the newest one so Opelo can respond, book, refund, or bring you in when it needs your decision.",
+      steps: [
+        "Open Messages and choose the newest customer request.",
+        "Let Opelo read the message and suggest a clear next move.",
+        "Approve the response or adjust it before it goes out.",
+      ],
+      actionLabel: "Open Messages",
+      href: "/inbox",
+    });
+  }
+
+  if (reviewActions.length > 0) {
+    const action = reviewActions[0];
+    const customer = customers.find((c) => c.id === action.customer_id);
+    recommendations.push({
+      id: "review-needed",
+      icon: "bell",
+      title: `Make the call on ${customer?.name ?? "a customer request"}`,
+      summary: "Opelo found something that needs your judgment before it moves forward.",
+      detail: action.owner_summary || "This request needs your personal attention because it falls outside your usual rules.",
+      steps: [
+        "Read the customer context in Activity.",
+        "Decide whether to approve, decline, or send a softer reply.",
+        "Update My Rules if this kind of request should be handled differently next time.",
+      ],
+      actionLabel: "View Activity",
+      href: "/logs",
+    });
+  }
+
+  if (counterOffers.length > 0) {
+    const latest = counterOffers[0];
+    const customer = customers.find((c) => c.id === latest.customer_id);
+    recommendations.push({
+      id: "follow-up-offer",
+      icon: "growth",
+      title: "Follow up on an open offer",
+      summary: `${customer?.name ?? "A customer"} got a price-safe reply. A short follow-up could help close it.`,
+      detail: "Opelo protected your price. The next business move is a simple follow-up that keeps the conversation warm without discounting too quickly.",
+      steps: [
+        "Check the last reply Opelo sent.",
+        "Send a short note asking if the customer wants to move forward.",
+        `Keep the floor at $${policies.min_project_price} unless you intentionally change the rule.`,
+      ],
+      actionLabel: "Open Messages",
+      href: "/inbox",
+    });
+  }
+
+  if (bookedMeetings.length > 0) {
+    recommendations.push({
+      id: "prepare-meetings",
+      icon: "calendar",
+      title: "Prepare for booked calls",
+      summary: `${bookedMeetings.length} ${bookedMeetings.length === 1 ? "meeting is" : "meetings are"} on the calendar. Turn them into next steps.`,
+      detail: "Booked meetings are only useful if each one has a clear goal. Opelo can help keep the customer context close so the call starts smoothly.",
+      steps: [
+        "Review the customer request before the call.",
+        "Write down the one outcome you want from the conversation.",
+        "After the call, add the next promise or follow-up to Messages.",
+      ],
+      actionLabel: "View Activity",
+      href: "/logs",
+    });
+  }
+
+  if (recommendations.length < 3) {
+    recommendations.push({
+      id: "tighten-rules",
+      icon: "rules",
+      title: "Tighten one business rule",
+      summary: `Your refund line is $${policies.refund_auto_approve_under}. Make sure it still feels right.`,
+      detail: "Clear rules help Opelo act faster and ask fewer unnecessary questions. Pick one money or booking boundary and make it match how you actually run the business.",
+      steps: [
+        "Open My Rules.",
+        "Check refund, booking, and minimum price amounts.",
+        "Save the rule that would make tomorrow easier.",
+      ],
+      actionLabel: "Open My Rules",
+      href: "/policies",
+    });
+  }
+
+  if (recommendations.length < 3) {
+    const setupDetail = businessDescription
+      ? `Based on your setup notes, Opelo should start by handling the kind of customer request you described: "${businessDescription.slice(0, 140)}${businessDescription.length > 140 ? "..." : ""}"`
+      : "Opelo needs one real customer request to learn the shape of your day-to-day work.";
+    recommendations.push({
+      id: "first-business-task",
+      icon: "chat",
+      title: `Start the first ${businessName} task`,
+      summary: "Use one real customer message so Opelo can turn your setup into action.",
+      detail: setupDetail,
+      steps: [
+        "Open Messages and add a request you would normally answer yourself.",
+        "Let Opelo suggest the reply, booking, refund, or follow-up.",
+        "Review Opelo's suggested response before sending.",
+      ],
+      actionLabel: "Open Messages",
+      href: "/inbox",
+    });
+  }
+
+  return recommendations.slice(0, 4);
+}
+
 export default async function DashboardPage() {
-  const [actions, customers, messages] = await Promise.all([
-    store.listActions(), store.listCustomers(), store.listMessages(),
+  const [businessName, businessDescription, policies, actions, customers, messages] = await Promise.all([
+    store.getBusinessName(), store.getBusinessDescription(), store.getPolicies(), store.listActions(), store.listCustomers(), store.listMessages(),
   ]);
+  const displayBusinessName = businessName === "Opelo Demo Studio" ? "your business" : businessName;
 
   // Simple stats
   const totalHandled = actions.length;
@@ -67,30 +211,31 @@ export default async function DashboardPage() {
 
   const recent = actions.slice(0, 8);
   const pendingMessages = messages.filter(m => m.status === "new");
+  const recommendations = buildRecommendations({ actions, businessDescription, businessName: displayBusinessName, customers, messages, policies });
 
   return (
-    <div className="max-w-5xl mx-auto px-8 py-8">
+    <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 md:px-8 md:py-8">
       {/* Header */}
-      <div className="flex items-end justify-between mb-8">
+      <div className="mb-6 flex flex-col gap-4 sm:mb-8 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-stone-900">Overview</h1>
+          <h1 className="font-serif text-3xl leading-tight text-stone-900 sm:text-4xl">Get work done, {displayBusinessName}</h1>
           <p className="text-stone-400 text-sm mt-0.5">Here's what Opelo handled for you</p>
         </div>
-        <Link href="/inbox" className="btn-primary">
-          + New message
-        </Link>
+        <NewMessageButton />
       </div>
 
       {/* Stat cards — Autosend style */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div className="mb-8 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
         {[
-          { emoji: "📬", label: "Requests handled", value: String(totalHandled), sub: "total this session" },
-          { emoji: "💰", label: "Money saved & earned", value: `$${moneySaved.toFixed(0)}`, sub: "refunds + new revenue" },
-          { emoji: "📅", label: "Meetings set up", value: String(meetings), sub: "auto-booked for you" },
-          { emoji: "🔔", label: "Need your review", value: String(needsReview), sub: "waiting on you", highlight: needsReview > 0 },
+          { icon: "inbox", label: "Requests handled", value: String(totalHandled), sub: "total this session" },
+          { icon: "money", label: "Money saved & earned", value: `$${moneySaved.toFixed(0)}`, sub: "refunds + new revenue" },
+          { icon: "calendar", label: "Meetings set up", value: String(meetings), sub: "auto-booked for you" },
+          { icon: "bell", label: "Need your review", value: String(needsReview), sub: "waiting on you", highlight: needsReview > 0 },
         ].map(card => (
-          <div key={card.label} className={`rounded-2xl border p-5 bg-white ${card.highlight ? "border-amber-200" : "border-stone-100"}`}>
-            <div className="text-2xl mb-3">{card.emoji}</div>
+          <div key={card.label} className={`rounded-2xl border bg-white p-4 sm:p-5 ${card.highlight ? "border-amber-200" : "border-stone-100"}`}>
+            <div className={`mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl ${card.highlight ? "bg-amber-50 text-amber-600" : "bg-stone-50 text-stone-700"}`}>
+              <AppIcon name={card.icon as AppIconName} />
+            </div>
             <div className={`text-3xl font-semibold tracking-tight ${card.highlight ? "text-amber-600" : "text-stone-900"}`}>
               {card.value}
             </div>
@@ -102,9 +247,11 @@ export default async function DashboardPage() {
 
       {/* Pending messages banner */}
       {pendingMessages.length > 0 && (
-        <div className="mb-6 flex items-center justify-between rounded-2xl border border-lime-200 bg-lime-50 px-5 py-4">
+        <div className="mb-6 flex flex-col gap-4 rounded-2xl border border-lime-200 bg-lime-50 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
           <div className="flex items-center gap-3">
-            <span className="text-xl">📬</span>
+            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-lime-700">
+              <AppIcon name="inbox" className="h-4 w-4" />
+            </span>
             <div>
               <p className="text-sm font-semibold text-lime-800">
                 {pendingMessages.length} new {pendingMessages.length === 1 ? "message" : "messages"} waiting
@@ -118,62 +265,69 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      {/* Activity section — Autosend campaign list style */}
-      <div className="mb-2">
-        <h2 className="text-sm font-semibold uppercase tracking-widest text-stone-400 mb-4">
-          📋 Recent activity
-        </h2>
+      <div className="grid gap-6 lg:grid-cols-[minmax(260px,320px)_1fr]">
+        <RecommendationsPanel recommendations={recommendations} />
 
-        {recent.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-stone-200 bg-white p-10 text-center">
-            <div className="text-4xl mb-3">🤖</div>
-            <p className="font-semibold text-stone-700">Opelo hasn't handled anything yet</p>
-            <p className="text-sm text-stone-400 mt-1">Go to Messages and run Opelo on your first request.</p>
-            <Link href="/inbox" className="mt-4 inline-flex btn-primary">Go to Messages →</Link>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {recent.map(a => {
-              const c = customers.find(x => x.id === a.customer_id);
-              const m = messages.find(x => x.id === a.message_id);
-              const badge = actionBadge(a.action_type);
-              return (
-                <div key={a.id} className="rounded-2xl border border-stone-100 bg-white px-6 py-4">
-                  {/* Row 1: badge + name + time */}
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-3">
-                      <span className="text-xl">{actionEmoji(a.action_type)}</span>
-                      <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-bold tracking-wider ${badge.cls}`}>
-                        {badge.label}
-                      </span>
-                      <span className="text-sm font-semibold text-stone-800">
-                        {c?.name ?? "Unknown"}
-                      </span>
+        {/* Activity section — Autosend campaign list style */}
+        <div className="mb-2">
+          <h2 className="text-sm font-semibold uppercase tracking-widest text-stone-400 mb-4">
+            Recent activity
+          </h2>
+
+          {recent.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-stone-200 bg-white p-6 text-center sm:p-10">
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-lime-50 text-lime-700">
+                <AppIcon name="spark" />
+              </div>
+              <p className="font-semibold text-stone-700">Opelo hasn't handled anything yet</p>
+              <p className="text-sm text-stone-400 mt-1">Go to Messages and run Opelo on your first request.</p>
+              <Link href="/inbox" className="mt-4 inline-flex btn-primary">Go to Messages →</Link>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {recent.map(a => {
+                const c = customers.find(x => x.id === a.customer_id);
+                const m = messages.find(x => x.id === a.message_id);
+                const badge = actionBadge(a.action_type);
+                return (
+                  <div key={a.id} className="rounded-2xl border border-stone-100 bg-white px-4 py-4 sm:px-6">
+                    {/* Row 1: badge + name + time */}
+                    <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
+                        <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-stone-50 text-stone-700">
+                          <AppIcon name={actionIcon(a.action_type)} className="h-4 w-4" />
+                        </span>
+                        <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-bold tracking-wider ${badge.cls}`}>
+                          {badge.label}
+                        </span>
+                        <span className="text-sm font-semibold text-stone-800">
+                          {c?.name ?? "Unknown"}
+                        </span>
+                      </div>
+                      <span className="text-xs text-stone-400">{timeAgo(a.created_at)}</span>
                     </div>
-                    <span className="text-xs text-stone-400">{timeAgo(a.created_at)}</span>
-                  </div>
 
-                  {/* Row 2: plain description */}
-                  <p className="text-sm text-stone-600 pl-10">{describeAction(a, customers)}</p>
+                    {/* Row 2: plain description */}
+                    <p className="text-sm text-stone-600 sm:pl-10">{describeAction(a, customers)}</p>
 
-                  {/* Row 3: message subject if available */}
-                  {m && (
-                    <p className="text-xs text-stone-400 pl-10 mt-1 truncate">Re: {m.subject}</p>
-                  )}
-
-                  {/* Row 4: mini stats */}
-                  <div className="mt-3 pl-10 flex items-center gap-6">
-                    {a.revenue_delta !== 0 && (
-                      <Stat label="Revenue impact" value={`${a.revenue_delta > 0 ? "+" : "−"}$${Math.abs(a.revenue_delta).toFixed(0)}`} color={a.revenue_delta > 0 ? "emerald" : "rose"} />
+                    {/* Row 3: message subject if available */}
+                    {m && (
+                      <p className="mt-1 truncate text-xs text-stone-400 sm:pl-10">Re: {m.subject}</p>
                     )}
-                    <Stat label="Decision" value={a.decision.replace("_", " ")} />
-                    {a.llm_used && <Stat label="AI enhanced" value="✓" />}
+
+                    {/* Row 4: mini stats */}
+                    <div className="mt-3 flex flex-wrap items-center gap-4 sm:gap-6 sm:pl-10">
+                      {a.revenue_delta !== 0 && (
+                        <Stat label="Money" value={`${a.revenue_delta > 0 ? "+" : "-"}$${Math.abs(a.revenue_delta).toFixed(0)}`} color={a.revenue_delta > 0 ? "emerald" : "rose"} />
+                      )}
+                      <Stat label="Result" value={a.decision.replace("_", " ")} />
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Footer hint */}

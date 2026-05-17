@@ -122,6 +122,83 @@ interface SendOutcome {
   detail: string;
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function renderOpeloEmailHtml(text: string): string {
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map(
+      (p) =>
+        `<p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#44403c;">${escapeHtml(
+          p,
+        ).replaceAll("\n", "<br />")}</p>`,
+    )
+    .join("");
+
+  return `
+<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:#fafaf9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1c1917;">
+    <div style="display:none;max-height:0;overflow:hidden;color:transparent;">
+      Opelo has handled this request.
+    </div>
+
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#fafaf9;padding:32px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border:1px solid #e7e5e4;border-radius:24px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.06);">
+            <tr>
+              <td style="padding:28px 28px 8px;">
+                <div style="font-family:Georgia,serif;font-size:30px;line-height:1;color:#1c1917;letter-spacing:-0.03em;">
+                  Opelo
+                </div>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:12px 28px 4px;">
+                <span style="display:inline-block;border:1px solid #d9f99d;background:#f7ffe0;color:#365314;border-radius:999px;padding:6px 10px;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">
+                  Request handled
+                </span>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:18px 28px 8px;">
+                ${paragraphs}
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:8px 28px 30px;">
+                <div style="height:1px;background:#e7e5e4;margin:8px 0 18px;"></div>
+                <p style="margin:0;font-size:13px;line-height:1.6;color:#78716c;">
+                  Sent by your Opelo AI manager<br />
+                  <span style="color:#a8a29e;">Operational judgment, not just automation.</span>
+                </p>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="height:8px;background:linear-gradient(90deg,#bef264,#84cc16,#4af0c8,#60a5fa,#f472b6);"></td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`.trim();
+}
+
 async function sendViaAgentMail(input: SendReplyInput): Promise<SendOutcome> {
   const key = process.env.AGENTMAIL_API_KEY!;
   const id = inboxId();
@@ -152,12 +229,18 @@ async function sendViaAgentMail(input: SendReplyInput): Promise<SendOutcome> {
       )}/reply`
     : `${base}/inboxes/${encodeURIComponent(id)}/messages/send`;
 
+  const html = renderOpeloEmailHtml(input.body);
+
   const payload: Record<string, unknown> = input.source_id
-    ? { text: input.body, html: undefined }
+    ? {
+        text: input.body,
+        html,
+      }
     : {
         to: [input.to],
         subject: input.subject,
         text: input.body,
+        html,
       };
 
   try {

@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
  *
  *   curl -X POST http://localhost:3000/api/agentmail/send-test \
  *     -H 'Content-Type: application/json' \
- *     -d '{"to":"you@gmail.com","subject":"Opelo test","text":"Hi from Maya"}'
+ *     -d '{"to":"you@gmail.com","subject":"Opelo test","text":"Hi from Opelo"}'
  */
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown> = {};

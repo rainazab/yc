@@ -10,23 +10,23 @@ export function CTAInput() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!value.trim()) { router.push("/inbox"); return; }
+    if (!value.trim()) { router.push("/get-started"); return; }
     setLoading(true);
     try {
       await fetch("/api/onboard", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description: value.trim() }),
+        body: JSON.stringify({ description: value.trim(), fresh: true }),
       });
     } finally {
       setLoading(false);
-      router.push("/inbox");
+      router.push("/dashboard");
     }
   };
 
   return (
-    <form onSubmit={handleSubmit} className="gradient-border-wrap relative mx-auto mt-8 max-w-2xl">
-      <div className="bg-white py-3.5 pl-6 pr-16" style={{ borderRadius: "50px" }}>
+    <form onSubmit={handleSubmit} className="gradient-border-wrap relative mx-auto mt-8 w-full max-w-2xl">
+      <div className="bg-white py-3.5 pl-4 pr-14 sm:pl-6 sm:pr-16" style={{ borderRadius: "50px" }}>
         <input
           type="text"
           value={value}
