@@ -31,6 +31,7 @@ import { nanoid } from "../integrations/util";
 import { calendar } from "../integrations/calendar";
 import {
   saveDecision as supermemorySaveDecision,
+  searchMemory as supermemorySearch,
   toMockExternalAction as supermemoryAction,
 } from "../integrations/supermemory";
 import { demoBusiness } from "../business";
@@ -64,6 +65,13 @@ export async function processInboundMessage(
   const isVip =
     customer.vip || policies.vip_customers.includes(customer.email);
 
+  // ── Pull past context from Supermemory so the LLM knows this customer ──────
+  const memQuery  = `${customer.name} ${customer.email || customer.id}`;
+  const memResult = await supermemorySearch(memQuery);
+  const pastContext = memResult.data.matches.length > 0
+    ? `\n\nPast interactions with this customer:\n${memResult.data.matches.join("\n---\n")}`
+    : "";
+
   const plan = decide({
     classification,
     detected_amount: hints.detected_amount,
@@ -88,7 +96,8 @@ export async function processInboundMessage(
       customer_name: customer.name,
       customer_email: customer.email,
       is_vip: isVip,
-      message_body: message.body,
+      // Append past context so Gemini knows if they've had issues before
+      message_body: message.body + pastContext,
       next_slot_label:
         plan.decision === "schedule" ? calendar.nextSlotLabel() : undefined,
       manager_name: options.managerName,
@@ -505,10 +514,12 @@ async function runExternalActions(args: RunArgs): Promise<MockExternalAction[]> 
 
   const memResp = await supermemorySaveDecision({
     customerId: customer.id,
+    customerName: customer.name,
     classification: args.plan.action_type,
     decision: args.plan.decision,
     policyApplied: args.plan.policy_applied,
     ownerSummary: owner_summary,
+    amountCents: detected_amount ? Math.round(detected_amount * 100) : undefined,
   });
   actions.push(
     supermemoryAction(

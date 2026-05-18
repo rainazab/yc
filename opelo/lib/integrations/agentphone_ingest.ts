@@ -4,6 +4,7 @@ import {
   ParsedCall,
   ParsedSMS,
   eventTypeOf,
+  lookupConversationIdForPhone,
   normalizeInboundCall,
   normalizeInboundSMS,
 } from "./agentphone";
@@ -66,9 +67,17 @@ async function ingestSMS(
   };
   await store.upsertCustomer(customer);
 
+  // If AgentPhone's webhook didn't include a conversation_id, look it up so
+  // replies to shared-imessage lines don't get a 403 (that field is required).
+  let conversationId = parsed.conversationId;
+  if (!conversationId) {
+    conversationId = await lookupConversationIdForPhone(parsed.from);
+  }
+
   const messageId = `msg_ap_${slug(parsed.source_id)}`;
-  const hasAgentphoneMeta =
-    parsed.agentId || parsed.conversationId || parsed.numberId || parsed.channel;
+  const agentId   = parsed.agentId   ?? process.env.AGENTPHONE_AGENT_ID?.trim();
+  const numberId  = parsed.numberId  ?? process.env.AGENTPHONE_NUMBER_ID?.trim();
+  const hasAgentphoneMeta = agentId || conversationId || numberId || parsed.channel;
   const message: InboundMessage = {
     id: messageId,
     customer_id: customerId,
@@ -85,9 +94,9 @@ async function ingestSMS(
     metadata: hasAgentphoneMeta
       ? {
           agentphone: {
-            agentId: parsed.agentId,
-            conversationId: parsed.conversationId,
-            numberId: parsed.numberId,
+            agentId,
+            conversationId,
+            numberId,
             channel: parsed.channel,
           },
         }

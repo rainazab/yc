@@ -107,6 +107,7 @@ function blank(): Snapshot {
   return {
     business_name: "Your business",
     business_description: "",
+    owner_phone: process.env.OWNER_PHONE_NUMBER || "",
     policies: defaultPolicies(),
     customers: [],
     messages: [],
@@ -122,6 +123,8 @@ function blank(): Snapshot {
       updated_at: new Date().toISOString(),
     },
     webhook_events: [],
+    payment_links: [],
+    pending_owner_actions: [],
   };
 }
 

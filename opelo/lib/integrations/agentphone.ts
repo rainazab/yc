@@ -275,6 +275,34 @@ async function callAgentPhone(input: SendSMSInput): Promise<SendOutcome> {
   };
 }
 
+/**
+ * Look up the AgentPhone conversation ID for a given participant phone number.
+ * Returns undefined if the API key is missing, the request fails, or no match.
+ * Used to fill in `conversationId` when it is absent from the inbound webhook.
+ */
+export async function lookupConversationIdForPhone(
+  fromPhone: string,
+): Promise<string | undefined> {
+  const key = process.env.AGENTPHONE_API_KEY?.trim();
+  if (!key || isDemo(key)) return undefined;
+  try {
+    const resp = await fetch(`${baseUrl()}/conversations?limit=50`, {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    if (!resp.ok) return undefined;
+    const json = await resp.json() as { data?: { id: string; participant?: string; phoneNumber?: string }[] };
+    const convs = json.data ?? [];
+    const normalized = fromPhone.replace(/[\s().-]/g, "");
+    const match = convs.find(c => {
+      const p = (c.participant ?? c.phoneNumber ?? "").replace(/[\s().-]/g, "");
+      return p === normalized;
+    });
+    return match?.id;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function sendSMS(
   input: SendSMSInput,
 ): Promise<MockExternalAction> {
