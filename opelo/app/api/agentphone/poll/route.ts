@@ -43,6 +43,7 @@ export async function GET() {
     // 1. Fetch conversations active in the last 60 minutes
     const convResp = await fetch(`${BASE}/conversations?limit=20`, {
       headers: { Authorization: `Bearer ${KEY}` },
+      cache: "no-store",
     });
     if (!convResp.ok) return NextResponse.json({ ok: false, reason: `conv fetch ${convResp.status}` });
 
@@ -58,6 +59,7 @@ export async function GET() {
       // 2. Fetch all messages with a large limit so we don't miss recent ones
       const msgResp = await fetch(`${BASE}/conversations/${conv.id}/messages?limit=50`, {
         headers: { Authorization: `Bearer ${KEY}` },
+        cache: "no-store",
       });
       if (!msgResp.ok) continue;
 
