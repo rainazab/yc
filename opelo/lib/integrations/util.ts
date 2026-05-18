@@ -1,0 +1,9 @@
+export function nanoid(prefix = "id"): string {
+  const t = Date.now().toString(36);
+  const r = Math.random().toString(36).slice(2, 8);
+  return `${prefix}_${t}${r}`;
+}
+
+export function isDemo(...keys: (string | undefined)[]): boolean {
+  return keys.some((k) => !k || k.trim() === "");
+}
