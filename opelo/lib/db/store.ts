@@ -25,6 +25,7 @@ const DATA_FILE = path.join(DATA_DIR, "store.json");
 interface Snapshot {
   business_name: string;
   business_description: string;
+  owner_phone: string;
   policies: Policies;
   customers: Customer[];
   messages: InboundMessage[];
@@ -33,6 +34,34 @@ interface Snapshot {
   pending_inbound: InboundMessage[];
   wallet: CompanyWallet;
   webhook_events: WebhookEvent[];
+  payment_links: StoredPaymentLink[];
+  pending_owner_actions: PendingOwnerAction[];
+}
+
+export interface StoredPaymentLink {
+  id: string;
+  action_id: string;
+  customer_id: string;
+  business_name: string;
+  description: string;
+  amount_cents: number;
+  stripe_url?: string;
+  sponge_url?: string;
+  status: "pending" | "paid";
+  created_at: string;
+}
+
+export interface PendingOwnerAction {
+  id: string;           // e.g. "poa_xxxx" — included in owner SMS for YES/NO replies
+  action_id: string;    // ActionRecord.id this came from
+  type: "approve_refund" | "approve_payment" | "review";
+  description: string;  // human-readable: "Approve $450 refund for Alex Chen"
+  customer_id: string;
+  customer_phone?: string;
+  amount_cents?: number;
+  resolved: boolean;
+  resolution?: "approved" | "declined";
+  created_at: string;
 }
 
 let cache: Snapshot | null = null;
@@ -42,6 +71,7 @@ function initial(): Snapshot {
   return {
     business_name: "Opelo Demo Studio",
     business_description: "A demo workspace with customer messages about refunds, sponsorships, bookings, and pricing.",
+    owner_phone: process.env.OWNER_PHONE_NUMBER || "",
     policies: defaultPolicies(),
     customers: seedCustomers(),
     messages: seedMessages(),
@@ -50,6 +80,26 @@ function initial(): Snapshot {
     pending_inbound: seedPendingInbound(),
     wallet: seedWallet(),
     webhook_events: [],
+    payment_links: [],
+    pending_owner_actions: [],
+  };
+}
+
+function blankSnapshot(): Snapshot {
+  return {
+    business_name: "Your business",
+    business_description: "",
+    owner_phone: process.env.OWNER_PHONE_NUMBER || "",
+    policies: defaultPolicies(),
+    customers: [],
+    messages: [],
+    actions: [],
+    owner_summaries: [],
+    pending_inbound: [],
+    wallet: { available_cents: 0, pending_cents: 0, refunded_today_cents: 0, revenue_generated_today_cents: 0, currency: "USD", updated_at: new Date().toISOString() },
+    webhook_events: [],
+    payment_links: [],
+    pending_owner_actions: [],
   };
 }
 
@@ -94,6 +144,9 @@ async function readSnapshot(): Promise<Snapshot> {
     if (!cache.pending_inbound) cache.pending_inbound = seedPendingInbound();
     if (!cache.wallet) cache.wallet = seedWallet();
     if (!cache.webhook_events) cache.webhook_events = [];
+    if (!cache.payment_links) cache.payment_links = [];
+    if (!cache.pending_owner_actions) cache.pending_owner_actions = [];
+    if (!cache.owner_phone) cache.owner_phone = process.env.OWNER_PHONE_NUMBER || "";
     return cache;
   } catch {
     cache = initial();
@@ -146,6 +199,60 @@ export const store = {
       return snap.business_description;
     });
   },
+  async getOwnerPhone(): Promise<string> {
+    const snap = await readSnapshot();
+    return snap.owner_phone || process.env.OWNER_PHONE_NUMBER || "";
+  },
+  async setOwnerPhone(phone: string): Promise<string> {
+    return withLock(async () => {
+      const snap = await readSnapshot();
+      snap.owner_phone = phone.trim();
+      await persist();
+      return snap.owner_phone;
+    });
+  },
+  // ── Payment links (dual-rail: Stripe + Sponge) ────────────────────────────
+  async savePaymentLink(link: StoredPaymentLink): Promise<StoredPaymentLink> {
+    return withLock(async () => {
+      const snap = await readSnapshot();
+      snap.payment_links.unshift(link);
+      await persist();
+      return link;
+    });
+  },
+  async getPaymentLink(id: string): Promise<StoredPaymentLink | null> {
+    const snap = await readSnapshot();
+    return snap.payment_links.find(l => l.id === id) ?? null;
+  },
+  async markPaymentLinkPaid(id: string): Promise<void> {
+    return withLock(async () => {
+      const snap = await readSnapshot();
+      const link = snap.payment_links.find(l => l.id === id);
+      if (link) { link.status = "paid"; await persist(); }
+    });
+  },
+
+  // ── Pending owner actions (YES/NO via SMS) ─────────────────────────────────
+  async savePendingOwnerAction(action: PendingOwnerAction): Promise<PendingOwnerAction> {
+    return withLock(async () => {
+      const snap = await readSnapshot();
+      snap.pending_owner_actions.unshift(action);
+      await persist();
+      return action;
+    });
+  },
+  async getPendingOwnerAction(id: string): Promise<PendingOwnerAction | null> {
+    const snap = await readSnapshot();
+    return snap.pending_owner_actions.find(a => a.id === id && !a.resolved) ?? null;
+  },
+  async resolvePendingOwnerAction(id: string, resolution: "approved" | "declined"): Promise<void> {
+    return withLock(async () => {
+      const snap = await readSnapshot();
+      const action = snap.pending_owner_actions.find(a => a.id === id);
+      if (action) { action.resolved = true; action.resolution = resolution; await persist(); }
+    });
+  },
+
   async getPolicies(): Promise<Policies> {
     const snap = await readSnapshot();
     return snap.policies;

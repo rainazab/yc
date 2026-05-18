@@ -26,7 +26,146 @@ export interface GeminiDecisionResponse {
   suggested_external_actions: string[];
 }
 
-const SYSTEM_INSTRUCTION = `You are an AI operations manager for a one-person business. You make practical business decisions based on explicit owner policies. You do not merely draft replies; you decide what should happen, choose the relevant policy, generate a customer response, and summarize the owner update. Never expose chain-of-thought. Reasoning_summary must be one short business sentence — not a step-by-step trace. Return only valid JSON.`;
+const SYSTEM_INSTRUCTION = `You are an AI operations manager for a one-person business. You make practical business decisions based on explicit owner policies. You do not merely draft replies; you decide what should happen, choose the relevant policy, generate a customer response, and summarize the owner update. Never expose chain-of-thought. Reasoning_summary must be one short business sentence — not a step-by-step trace. Return only valid JSON.
+
+LANGUAGE: Detect the language of the inbound message and write customer_response in THAT SAME LANGUAGE. If the message is in Spanish, reply in Spanish. If French, reply in French. If Portuguese, reply in Portuguese. Owner summaries and reasoning_summary stay in English.`;
+
+// ─── Conversational (multi-turn) types ───────────────────────────────────────
+
+export interface ConversationTurn {
+  role: "user" | "model";
+  text: string;
+}
+
+export interface ConversationalInput {
+  businessName: string;
+  businessDescription: string;
+  policiesSummary: string;
+  managerName: string;
+  history: ConversationTurn[];   // previous turns, oldest first
+  latestMessage: string;          // the new customer message
+  customerName?: string;
+}
+
+export interface ConversationalResponse {
+  /** "chat" = keep talking; "action" = classify + execute */
+  mode: "chat" | "action";
+  chat_reply?: string;
+  customer_response: string;      // final reply to send (used in both modes)
+  // action-mode fields
+  classification?: string;
+  decision?: string;
+  action_type?: string;
+  policy_applied?: string;
+  owner_summary?: string;
+  reasoning_summary?: string;
+}
+
+const CONVERSATIONAL_SYSTEM = `You are an AI operations manager named {MANAGER} working for {BUSINESS}.
+
+About the business: {DESCRIPTION}
+
+Business rules you follow:
+{POLICIES}
+
+Your job is to have natural, warm conversations with customers AND make business decisions when appropriate.
+
+When to keep chatting (mode="chat"):
+- Greetings, small talk, or vague openers ("Hi", "Hey", "I have a question")
+- You need more info to act (ask 1 clear question max)
+- Customer is still describing their situation
+
+When to act (mode="action"):
+- Refund request with an amount mentioned
+- Someone asking about pricing / budget
+- Sponsorship offer with a price
+- Lead wanting to book or schedule something
+- Complaint or escalation language
+
+LANGUAGE: Always reply in the customer's language. Detect it from their messages.
+
+Return ONLY valid JSON — no prose outside the JSON:
+{
+  "mode": "chat" | "action",
+  "chat_reply": "warm, natural reply if mode=chat (1-2 sentences, no jargon)",
+  "customer_response": "the message to send to the customer (required, same as chat_reply when mode=chat)",
+  "classification": "refund_request|pricing_exception|sponsorship_offer|qualified_lead|scheduling_request|escalation (only if mode=action)",
+  "decision": "approve|reject|negotiate|schedule|escalate_to_owner (only if mode=action)",
+  "action_type": "refund_issued|discount_offered|sponsorship_countered|meeting_booked|owner_escalated|auto_reply_sent (only if mode=action)",
+  "policy_applied": "short policy label (only if mode=action)",
+  "owner_summary": "one sentence for owner (only if mode=action)",
+  "reasoning_summary": "one short business sentence (only if mode=action)"
+}`;
+
+/**
+ * Multi-turn conversational call — passes full conversation history to Gemini
+ * so it can ask follow-up questions and respond naturally before acting.
+ */
+export async function callGeminiConversational(
+  input: ConversationalInput,
+): Promise<ConversationalResponse | null> {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return null;
+
+  const model = geminiModelName();
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+
+  const systemText = CONVERSATIONAL_SYSTEM
+    .replace("{MANAGER}", input.managerName)
+    .replace("{BUSINESS}", input.businessName)
+    .replace("{DESCRIPTION}", input.businessDescription || "A small business")
+    .replace("{POLICIES}", input.policiesSummary);
+
+  // Build multi-turn contents array
+  const contents = [
+    ...input.history.map(t => ({
+      role: t.role,
+      parts: [{ text: t.text }],
+    })),
+    { role: "user" as const, parts: [{ text: input.latestMessage }] },
+  ];
+
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemText }] },
+        contents,
+        generationConfig: { temperature: 0.6, responseMimeType: "application/json" },
+      }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    return parseConversational(text);
+  } catch {
+    return null;
+  }
+}
+
+function parseConversational(text: string): ConversationalResponse | null {
+  const start = text.indexOf("{");
+  const end   = text.lastIndexOf("}");
+  if (start === -1 || end === -1) return null;
+  try {
+    const p = JSON.parse(text.slice(start, end + 1)) as Partial<ConversationalResponse>;
+    if (!p.customer_response && !p.chat_reply) return null;
+    return {
+      mode:               (p.mode === "action" ? "action" : "chat") as "chat" | "action",
+      chat_reply:         p.chat_reply,
+      customer_response:  String(p.customer_response || p.chat_reply || ""),
+      classification:     p.classification,
+      decision:           p.decision,
+      action_type:        p.action_type,
+      policy_applied:     p.policy_applied,
+      owner_summary:      p.owner_summary,
+      reasoning_summary:  p.reasoning_summary,
+    };
+  } catch {
+    return null;
+  }
+}
 
 export function isGeminiAvailable(): boolean {
   return !!process.env.GEMINI_API_KEY;

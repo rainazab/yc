@@ -7,6 +7,7 @@ import { AppIcon, AppIconName } from "@/components/AppIcon";
 export default function GetStartedPage() {
   const router = useRouter();
   const [name, setName] = useState("");
+  const [ownerPhone, setOwnerPhone] = useState("");
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -21,6 +22,7 @@ export default function GetStartedPage() {
         body: JSON.stringify({
           business_name: name.trim(),
           description,
+          owner_phone: ownerPhone.trim(),
           fresh: true,
         }),
       });
@@ -64,6 +66,20 @@ export default function GetStartedPage() {
             </div>
 
             <div>
+              <label className="block text-sm font-medium text-stone-700 mb-1.5">
+                Your phone number
+                <span className="ml-1.5 text-xs font-normal text-stone-400"></span>
+              </label>
+              <input
+                type="tel"
+                value={ownerPhone}
+                onChange={e => setOwnerPhone(e.target.value)}
+                placeholder="+1 415 555 0123"
+                className="w-full rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 placeholder:text-stone-400 focus:border-lime-400 focus:outline-none focus:ring-2 focus:ring-lime-300/40"
+              />
+            </div>
+
+            <div>
               <label className="block text-sm font-medium text-stone-700 mb-1.5">What do you do? What should Opelo handle?</label>
               <textarea
                 value={description}
@@ -84,7 +100,7 @@ export default function GetStartedPage() {
                   { icon: "calendar", label: "Meeting bookings" },
                   { icon: "chat", label: "Pricing questions" },
                   { icon: "handshake", label: "Sponsorship offers" },
-                  { icon: "spark", label: "And more" },
+                  { icon: "sparkles", label: "And more" },
                 ].map((item) => (
                   <div key={item.label} className="flex items-center gap-2 text-sm text-stone-600">
                     <AppIcon name={item.icon as AppIconName} className="h-4 w-4 text-stone-400" />

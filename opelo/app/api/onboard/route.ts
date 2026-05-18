@@ -12,10 +12,11 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(req: NextRequest) {
   try {
-    const { description, fresh, business_name } = await req.json().catch(() => ({
+    const { description, fresh, business_name, owner_phone } = await req.json().catch(() => ({
       description: "",
       fresh: false,
       business_name: "",
+      owner_phone: "",
     }));
     if (!description || typeof description !== "string") {
       return NextResponse.json({ error: "description required" }, { status: 400 });
@@ -26,6 +27,9 @@ export async function POST(req: NextRequest) {
     }
     if (typeof business_name === "string" && business_name.trim()) {
       await store.setBusinessName(business_name);
+    }
+    if (typeof owner_phone === "string" && owner_phone.trim()) {
+      await store.setOwnerPhone(owner_phone);
     }
     await store.setBusinessDescription(description);
 

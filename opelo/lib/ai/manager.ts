@@ -13,13 +13,20 @@ import { enhanceWithLLM } from "./llm";
 import { agentmail } from "../integrations/agentmail";
 import {
   createRefund as spongeCreateRefund,
-  createPaymentLink as spongeCreatePaymentLink,
   toMockExternalAction as spongeAction,
 } from "../integrations/sponge";
 import {
+  createStripePaymentLink,
+  toMockExternalAction as stripeAction,
+} from "../integrations/stripe";
+import { createSpongeMcpPaymentLink } from "../integrations/sponge_mcp";
+import {
   sendOwnerUpdate as agentphoneSendOwnerUpdate,
   sendSMS as agentphoneSendSMS,
+  sendDirectSMS,
 } from "../integrations/agentphone";
+import { store } from "../db/store";
+import type { PendingOwnerAction } from "../db/store";
 import { nanoid } from "../integrations/util";
 import { calendar } from "../integrations/calendar";
 import {
@@ -31,6 +38,8 @@ import { demoBusiness } from "../business";
 export interface ProcessOptions {
   useLLM?: boolean;
   managerName?: string;
+  /** Prior conversation turns passed through to the LLM for context. */
+  conversationHistory?: { role: "user" | "model"; text: string }[];
 }
 
 interface DecisionPlan {
@@ -338,21 +347,49 @@ async function runExternalActions(args: RunArgs): Promise<MockExternalAction[]> 
     );
   }
 
+  // ── Dual-rail payment link (Stripe card + Sponge crypto) ────────────────────
   if (plan.action_type === "discount_offered" || plan.action_type === "sponsorship_countered") {
     const counter = plan.counter_offer ?? 0;
     if (counter > 0) {
-      const resp = await spongeCreatePaymentLink({
-        amountCents: Math.round(counter * 100),
-        description:
-          plan.action_type === "sponsorship_countered"
-            ? `${demoBusiness.name} — sponsorship at floor`
-            : `${demoBusiness.name} — reduced scope engagement`,
-        customerEmail: customer.email,
+      const desc = plan.action_type === "sponsorship_countered"
+        ? `${demoBusiness.name} — sponsorship`
+        : `${demoBusiness.name} — project deposit`;
+      const cents = Math.round(counter * 100);
+
+      // Create both rails in parallel
+      const [stripeRes, spongeRes] = await Promise.allSettled([
+        createStripePaymentLink({ amountCents: cents, description: desc, customerEmail: customer.email || undefined }),
+        createSpongeMcpPaymentLink({ description: desc, amountUsd: counter }),
+      ]);
+
+      const stripeUrl = stripeRes.status === "fulfilled" && stripeRes.value.mode === "live" ? stripeRes.value.url : undefined;
+      const spongeUrl = spongeRes.status === "fulfilled" ? spongeRes.value.url : undefined;
+
+      // Store a unified /pay/[id] record
+      const payId = nanoid("pay");
+      await store.savePaymentLink({
+        id: payId,
+        action_id: "",
+        customer_id: customer.id,
+        business_name: demoBusiness.name,
+        description: desc,
+        amount_cents: cents,
+        stripe_url: stripeUrl,
+        sponge_url: spongeUrl,
+        status: "pending",
+        created_at: new Date().toISOString(),
       });
+
+      // The URL we send to the customer — prefer the unified page so they see both options
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+      const payUrl = stripeUrl || spongeUrl
+        ? `${baseUrl}/pay/${payId}`
+        : `${baseUrl}/pay/${payId}`;
+
       actions.push(
-        spongeAction(
-          resp,
-          `Payment link for $${counter.toLocaleString()} → ${resp.data.url}`,
+        stripeAction(
+          { id: payId, url: payUrl, amount_cents: cents, capped: false, mode: stripeUrl ? "live" : "mock" },
+          `Payment page (card + crypto) for $${counter.toLocaleString()} → ${payUrl}`,
         ),
       );
     }
@@ -369,9 +406,7 @@ async function runExternalActions(args: RunArgs): Promise<MockExternalAction[]> 
     );
   }
 
-  // Reply to the customer via the same channel they used to reach us. The
-  // `live` flag gates real send to webhook-ingested customers (id prefix
-  // cus_live_) so seeded demo customers stay mocked.
+  // ── Reply to customer on their original channel ──────────────────────────
   const isLiveCustomer = customer.id.startsWith("cus_live_");
   switch (message.channel) {
     case "email":
@@ -389,12 +424,16 @@ async function runExternalActions(args: RunArgs): Promise<MockExternalAction[]> 
       break;
     case "sms":
     case "phone_transcript": {
-      const to = customer.phone || customer.email || "+15555550100";
+      // After a call, send the caller a clean SMS summary of what was decided
+      const to = customer.phone || "+15555550100";
       const apMeta = message.metadata?.agentphone;
+
+      const callSummary = buildCallSummary(plan, customer_response, owner_summary);
+
       actions.push(
         await agentphoneSendSMS({
           to,
-          body: customer_response,
+          body: callSummary,
           live: isLiveCustomer && !!customer.phone,
           source_id: message.source_id,
           agentId: apMeta?.agentId,
@@ -416,14 +455,52 @@ async function runExternalActions(args: RunArgs): Promise<MockExternalAction[]> 
       break;
   }
 
-  const notifyOwner =
+  // ── Owner notification — plain summary or actionable YES/NO for escalations ──
+  const needsOwnerNotice =
     plan.action_type === "owner_escalated" ||
-    plan.action_type === "refund_issued" ||
-    plan.action_type === "meeting_booked" ||
+    plan.action_type === "refund_issued"   ||
+    plan.action_type === "meeting_booked"  ||
     plan.action_type === "sponsorship_countered" ||
     plan.action_type === "discount_offered";
-  if (notifyOwner) {
-    actions.push(await agentphoneSendOwnerUpdate(`Opelo: ${owner_summary}`));
+
+  if (needsOwnerNotice) {
+    const isCallTranscript = message.channel === "phone_transcript";
+
+    if (plan.action_type === "owner_escalated") {
+      // Save a pending action so the owner can reply YES/NO
+      const pendingId = nanoid("poa");
+      const pendingAction: PendingOwnerAction = {
+        id: pendingId,
+        action_id: "",
+        type: args.detected_amount && args.detected_amount > 0 ? "approve_refund" : "review",
+        description: owner_summary,
+        customer_id: customer.id,
+        customer_phone: customer.phone,
+        amount_cents: args.detected_amount ? Math.round(args.detected_amount * 100) : undefined,
+        resolved: false,
+        created_at: new Date().toISOString(),
+      };
+      await store.savePendingOwnerAction(pendingAction);
+
+      // Actionable SMS: includes the YES/NO reply code
+      const smsLines: string[] = [];
+      if (isCallTranscript) {
+        smsLines.push(`📞 Call from ${customer.name}`);
+      } else {
+        smsLines.push(`💬 ${customer.name} needs your attention`);
+      }
+      smsLines.push(owner_summary);
+      smsLines.push(`Reply YES·${pendingId} to approve or NO·${pendingId} to decline`);
+      actions.push(await agentphoneSendOwnerUpdate(smsLines.join("\n")));
+
+    } else {
+      // Non-escalation: standard summary with call context if applicable
+      const prefix = isCallTranscript ? "📞 Call handled" : "✅ Opelo";
+      const callContext = isCallTranscript
+        ? `\nCall from ${customer.name} (${customer.phone ?? "unknown number"})`
+        : "";
+      actions.push(await agentphoneSendOwnerUpdate(`${prefix}: ${owner_summary}${callContext}`));
+    }
   }
 
   const memResp = await supermemorySaveDecision({
@@ -445,4 +522,40 @@ async function runExternalActions(args: RunArgs): Promise<MockExternalAction[]> 
 
 function firstName(full: string): string {
   return full.split(/\s+/)[0] || full;
+}
+
+function buildCallSummary(
+  plan: DecisionPlan,
+  customerResponse: string,
+  ownerSummary: string,
+): string {
+  const lines: string[] = ["📞 Call summary from Opelo:"];
+
+  switch (plan.action_type) {
+    case "refund_issued":
+      lines.push(`✅ Your refund of $${Math.abs(plan.revenue_delta || 0).toFixed(2)} has been approved and processed.`);
+      lines.push("You'll see it on your statement in 3–5 business days.");
+      break;
+    case "meeting_booked":
+      lines.push("📅 Your meeting has been confirmed.");
+      lines.push(customerResponse.split("\n")[0] || ownerSummary);
+      break;
+    case "owner_escalated":
+      lines.push("🔔 Your request has been flagged for the owner.");
+      lines.push("You'll hear back within 1 business day.");
+      break;
+    case "sponsorship_countered":
+      lines.push("💬 We sent you a counter-offer.");
+      lines.push(customerResponse.split("\n")[0] || ownerSummary);
+      break;
+    case "discount_offered":
+      lines.push("💬 We've held our pricing floor and proposed an alternative scope.");
+      lines.push(customerResponse.split("\n")[0] || ownerSummary);
+      break;
+    default:
+      lines.push(customerResponse.split("\n")[0] || ownerSummary);
+  }
+
+  lines.push("\nReply to this message if you have questions.");
+  return lines.join("\n");
 }
